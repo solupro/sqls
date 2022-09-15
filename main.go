@@ -115,8 +115,11 @@ func serve(c *cli.Context) error {
 	// websocket server
 	addr := ":8091"
 	http.HandleFunc("/sqls", wsServe)
-	go http.ListenAndServe(addr, nil)
 	log.Println("sqls websocket server on:", addr)
+	err := http.ListenAndServe(addr, nil)
+	if nil != err {
+		log.Fatal("server error:", err)
+	}
 
 	return nil
 }
