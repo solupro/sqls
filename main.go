@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -145,35 +145,47 @@ func wsServe(w http.ResponseWriter, r *http.Request) {
 func wsHandleRequest(ws *websocket.Conn) {
 	// Initialize language server
 	server := handler.NewServer()
+	h := jsonrpc2.HandlerWithError(server.Handle)
+	ctx := context.Background()
+	conn := jsonrpc2.NewConn(
+		ctx,
+		jsonrpc2.NewBufferedStream(ws.UnderlyingConn(), jsonrpc2.VSCodeObjectCodec{}),
+		h,
+	)
+
 	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Println(err)
+		}
+
 		if err := server.Stop(); err != nil {
 			log.Println(err)
 		}
 	}()
-	h := jsonrpc2.HandlerWithError(server.Handle)
 
 	for {
-		mt, reader, err := ws.NextReader()
+		mt, datas, err := ws.ReadMessage()
 		if nil != err {
 			log.Println("reader error:", err)
 			return
 		}
-		writer, err := ws.NextWriter(mt)
+		var req jsonrpc2.Request
+		err = json.Unmarshal(datas, &req)
+		if nil != err {
+			log.Println("parse request error:", err)
+			continue
+		}
+
+		result, err := server.Handle(ctx, conn, &req)
+		if nil != err {
+			log.Println("call method error:", err)
+		}
+		res, err := json.Marshal(result)
+		err = ws.WriteMessage(mt, res)
 		if nil != err {
 			log.Println("writer error:", err)
 			return
 		}
-		<-jsonrpc2.NewConn(
-			context.Background(),
-			jsonrpc2.NewBufferedStream(struct {
-				io.ReadCloser
-				io.Writer
-			}{
-				ioutil.NopCloser(reader),
-				writer,
-			}, jsonrpc2.VSCodeObjectCodec{}),
-			h,
-		).DisconnectNotify()
 	}
 }
 func wsClose(ws *websocket.Conn) error {
