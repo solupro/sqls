@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gorilla/websocket"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -140,6 +142,23 @@ func serve(c *cli.Context) error {
 	if trace {
 		connOpt = append(connOpt, jsonrpc2.LogMessages(log.New(logWriter, "", 0)))
 	}
+
+	// websocket server
+	addr := ":8091"
+	var upgrader = websocket.Upgrader{}
+	http.HandleFunc("/sqls", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Print("upgrade:", err)
+			return
+		}
+		defer c.Close()
+
+		io.Copy(os.Stdin, r.Body)
+		io.Copy(w, os.Stdout)
+	})
+	go http.ListenAndServe(addr, nil)
+	log.Println("sqls websocket server on:", addr)
 
 	// Start language server
 	log.Println("sqls: reading on stdin, writing on stdout")

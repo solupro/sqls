@@ -7,6 +7,7 @@ require (
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/godror/godror v0.29.0
 	github.com/google/go-cmp v0.5.6
+	github.com/gorilla/websocket v1.4.1 // indirect
 	github.com/jackc/pgx/v4 v4.12.0
 	github.com/k0kubun/colorstring v0.0.0-20150214042306-9440f1994b88 // indirect
 	github.com/k0kubun/pp v2.4.0+incompatible
