@@ -152,27 +152,29 @@ func wsHandleRequest(ws *websocket.Conn) {
 	}()
 	h := jsonrpc2.HandlerWithError(server.Handle)
 
-	mt, reader, err := ws.NextReader()
-	if nil != err {
-		log.Println("reader error:", err)
-		return
+	for {
+		mt, reader, err := ws.NextReader()
+		if nil != err {
+			log.Println("reader error:", err)
+			return
+		}
+		writer, err := ws.NextWriter(mt)
+		if nil != err {
+			log.Println("writer error:", err)
+			return
+		}
+		<-jsonrpc2.NewConn(
+			context.Background(),
+			jsonrpc2.NewBufferedStream(struct {
+				io.ReadCloser
+				io.Writer
+			}{
+				ioutil.NopCloser(reader),
+				writer,
+			}, jsonrpc2.VSCodeObjectCodec{}),
+			h,
+		).DisconnectNotify()
 	}
-	writer, err := ws.NextWriter(mt)
-	if nil != err {
-		log.Println("writer error:", err)
-		return
-	}
-	<-jsonrpc2.NewConn(
-		context.Background(),
-		jsonrpc2.NewBufferedStream(struct {
-			io.ReadCloser
-			io.Writer
-		}{
-			ioutil.NopCloser(reader),
-			writer,
-		}, jsonrpc2.VSCodeObjectCodec{}),
-		h,
-	).DisconnectNotify()
 }
 func wsClose(ws *websocket.Conn) error {
 	const deadline = time.Second
