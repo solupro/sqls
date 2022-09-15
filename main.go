@@ -145,7 +145,11 @@ func serve(c *cli.Context) error {
 
 	// websocket server
 	addr := ":8091"
-	var upgrader = websocket.Upgrader{}
+	var upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
 	http.HandleFunc("/sqls", func(w http.ResponseWriter, r *http.Request) {
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
