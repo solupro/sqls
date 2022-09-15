@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/gorilla/websocket"
@@ -153,37 +152,27 @@ func wsHandleRequest(ws *websocket.Conn) {
 	}()
 	h := jsonrpc2.HandlerWithError(server.Handle)
 
-	for {
-		_, req, err := ws.ReadMessage()
-		if err != nil {
-			log.Println("ReadMessage:", err)
-			return
-		}
-		var res bytes.Buffer
-
-		<-jsonrpc2.NewConn(
-			context.Background(),
-			jsonrpc2.NewBufferedStream(struct {
-				io.ReadCloser
-				io.Writer
-			}{
-				ioutil.NopCloser(bytes.NewReader(req)),
-				&res,
-			}, jsonrpc2.VSCodeObjectCodec{}),
-			h,
-		).DisconnectNotify()
-
-		if err != nil {
-			log.Println("ServeRequest:", err)
-			return
-		}
-
-		err = ws.WriteMessage(websocket.TextMessage, res.Bytes())
-		if err != nil {
-			log.Println("WriteMessage:", err)
-			return
-		}
+	mt, reader, err := ws.NextReader()
+	if nil != err {
+		log.Println("reader error:", err)
+		return
 	}
+	writer, err := ws.NextWriter(mt)
+	if nil != err {
+		log.Println("writer error:", err)
+		return
+	}
+	<-jsonrpc2.NewConn(
+		context.Background(),
+		jsonrpc2.NewBufferedStream(struct {
+			io.ReadCloser
+			io.Writer
+		}{
+			ioutil.NopCloser(reader),
+			writer,
+		}, jsonrpc2.VSCodeObjectCodec{}),
+		h,
+	).DisconnectNotify()
 }
 func wsClose(ws *websocket.Conn) error {
 	const deadline = time.Second
