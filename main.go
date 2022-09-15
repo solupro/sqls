@@ -1,17 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/sourcegraph/jsonrpc2"
 	"github.com/urfave/cli/v2"
@@ -95,8 +97,6 @@ func realMain() error {
 
 func serve(c *cli.Context) error {
 	logfile := c.String("log")
-	configFile := c.String("config")
-	trace := c.Bool("trace")
 
 	// Initialize log writer
 	var logWriter io.Writer
@@ -112,6 +112,35 @@ func serve(c *cli.Context) error {
 	}
 	log.SetOutput(logWriter)
 
+	// websocket server
+	addr := ":8091"
+	http.HandleFunc("/sqls", wsServe)
+	go http.ListenAndServe(addr, nil)
+	log.Println("sqls websocket server on:", addr)
+
+	return nil
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+func wsServe(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer conn.Close()
+
+	wsHandleRequest(conn)
+	wsClose(conn)
+	log.Println("Exiting wsServe")
+}
+
+func wsHandleRequest(ws *websocket.Conn) {
 	// Initialize language server
 	server := handler.NewServer()
 	defer func() {
@@ -121,95 +150,41 @@ func serve(c *cli.Context) error {
 	}()
 	h := jsonrpc2.HandlerWithError(server.Handle)
 
-	// Load specific config
-	if configFile != "" {
-		cfg, err := config.GetConfig(configFile)
+	for {
+		_, req, err := ws.ReadMessage()
 		if err != nil {
-			return fmt.Errorf("cannot read specificed config, %w", err)
-		}
-		server.SpecificFileCfg = cfg
-	} else {
-		// Load default config
-		cfg, err := config.GetDefaultConfig()
-		if err != nil && !errors.Is(config.ErrNotFoundConfig, err) {
-			return fmt.Errorf("cannot read default config, %w", err)
-		}
-		server.DefaultFileCfg = cfg
-	}
-
-	// Set connect option
-	var connOpt []jsonrpc2.ConnOpt
-	if trace {
-		connOpt = append(connOpt, jsonrpc2.LogMessages(log.New(logWriter, "", 0)))
-	}
-
-	// websocket server
-	addr := ":8091"
-	var upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-	http.HandleFunc("/sqls", func(w http.ResponseWriter, r *http.Request) {
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Print("upgrade:", err)
+			log.Println("ReadMessage:", err)
 			return
 		}
-		defer c.Close()
-		for {
-			mt, reader, err := c.NextReader()
-			if err != nil {
-				log.Println("read:", err)
-				break
-			}
-			_, err = io.Copy(os.Stdin, reader)
-			if nil != err {
-				log.Println("reader copy error:", err)
-			}
+		var res bytes.Buffer
 
-			writer, err := c.NextWriter(mt)
-			if err != nil {
-				log.Println("write:", err)
-				break
-			}
-			_, err = io.Copy(writer, os.Stdout)
-			if nil != err {
-				log.Println("writer copy error:", err)
-			}
+		<-jsonrpc2.NewConn(
+			context.Background(),
+			jsonrpc2.NewBufferedStream(struct {
+				io.ReadCloser
+				io.Writer
+			}{
+				ioutil.NopCloser(bytes.NewReader(req)),
+				&res,
+			}, jsonrpc2.VSCodeObjectCodec{}),
+			h,
+		).DisconnectNotify()
+
+		if err != nil {
+			log.Println("ServeRequest:", err)
+			return
 		}
-	})
-	go http.ListenAndServe(addr, nil)
-	log.Println("sqls websocket server on:", addr)
 
-	// Start language server
-	log.Println("sqls: reading on stdin, writing on stdout")
-	<-jsonrpc2.NewConn(
-		context.Background(),
-		jsonrpc2.NewBufferedStream(stdrwc{}, jsonrpc2.VSCodeObjectCodec{}),
-		h,
-		connOpt...,
-	).DisconnectNotify()
-	log.Println("sqls: connections closed")
-
-	return nil
-}
-
-type stdrwc struct{}
-
-func (stdrwc) Read(p []byte) (int, error) {
-	return os.Stdin.Read(p)
-}
-
-func (stdrwc) Write(p []byte) (int, error) {
-	return os.Stdout.Write(p)
-}
-
-func (stdrwc) Close() error {
-	if err := os.Stdin.Close(); err != nil {
-		return err
+		err = ws.WriteMessage(websocket.TextMessage, res.Bytes())
+		if err != nil {
+			log.Println("WriteMessage:", err)
+			return
+		}
 	}
-	return os.Stdout.Close()
+}
+func wsClose(ws *websocket.Conn) error {
+	const deadline = time.Second
+	return ws.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(deadline))
 }
 
 func OpenEditor(program string, args ...string) error {
