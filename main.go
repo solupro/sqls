@@ -157,9 +157,27 @@ func serve(c *cli.Context) error {
 			return
 		}
 		defer c.Close()
+		for {
+			mt, reader, err := c.NextReader()
+			if err != nil {
+				log.Println("read:", err)
+				break
+			}
+			_, err = io.Copy(os.Stdin, reader)
+			if nil != err {
+				log.Println("reader copy error:", err)
+			}
 
-		io.Copy(os.Stdin, r.Body)
-		io.Copy(w, os.Stdout)
+			writer, err := c.NextWriter(mt)
+			if err != nil {
+				log.Println("write:", err)
+				break
+			}
+			_, err = io.Copy(writer, os.Stdout)
+			if nil != err {
+				log.Println("writer copy error:", err)
+			}
+		}
 	})
 	go http.ListenAndServe(addr, nil)
 	log.Println("sqls websocket server on:", addr)
